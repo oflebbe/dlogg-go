@@ -1,4 +1,4 @@
-module dlogg-go
+module github.com/oflebbe/dlogg-go
 
 go 1.16
 
