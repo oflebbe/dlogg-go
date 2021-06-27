@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -43,9 +42,36 @@ func TestConversion(t *testing.T) {
 
 func TestOutput(t *testing.T) {
 	df := Dataframe{TypeUVF: 128, RawData: []byte{22, 34, 35, 35, 189, 34, 0, 0, 165, 33, 168, 34, 243, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 48, 0, 0, 0, 128, 128, 128, 1, 0, 0, 0, 0, 71, 20, 54, 0, 0, 1, 0, 1, 0, 1, 0, 1}}
-	m := ConvertDigitalOutputs([]Dataframe{df})
+
+	b := []Dataframe{df}
+	m := ConvertDigitalOutputs(b)
 	if len(m) != 15 {
 		t.Error("length wrong")
 	}
-	fmt.Printf("%v\n", m)
+	for _, v := range m {
+		if v {
+			t.Error("rates are zero")
+		}
+	}
+
+	rates := ConvertRates(b)
+	for _, v := range rates {
+		if v != 0 {
+			t.Error("rates are zero")
+		}
+	}
+
+	powers, energies := ConvertHeats(b)
+
+	if len(powers) != 1 || len(energies) != 1 {
+		t.Error("only one heatmeasurement available")
+	}
+
+	if powers[0] != 0.0 {
+		t.Errorf("unexpected %f", powers[0])
+	}
+	if energies[0] != 54519.101562 {
+		t.Errorf("unexpected %f", energies[0])
+	}
+
 }
