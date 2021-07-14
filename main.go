@@ -90,9 +90,7 @@ func (d *Device) getModulmodus() (err error) {
 	if outNum != 1 {
 		return errors.New("could not write")
 	}
-	log.Printf("Read\n")
 	inNum, err := d.Port.Read(rcvbuf[:])
-	log.Printf("Read finish\n")
 	if err != nil {
 		return err
 	}
@@ -124,7 +122,9 @@ func New(device string) (*Device, error) {
 	}
 	log.Printf("Open Succeeded")
 	d := &Device{Port: port}
-	if err != d.getModulmodus() {
+	err = d.getModulmodus()
+	if err != nil {
+		log.Printf("Get Modulmode failed\n")
 		return nil, err
 	}
 	log.Printf("Module Mode known")
@@ -197,15 +197,20 @@ func (d *Device) Read1DL() (Dataframe, error) {
 	default:
 		return df, err
 	}
-	log.Printf("have to read %d bytes", count)
-	lenRead, err := d.Port.Read(df.RawData)
-	if err != nil {
-		return df, err
+	startBuf := 0
+	expected := len(df.RawData)
+	for {
+
+		log.Printf("have to read %d bytes", expected-startBuf)
+		lenRead, err := d.Port.Read(df.RawData[startBuf:expected])
+		if err != nil {
+			return df, err
+		}
+		if startBuf+lenRead == expected {
+			return df, nil
+		}
+		startBuf = lenRead
 	}
-	if lenRead != len(df.RawData) {
-		return df, errors.New("not enough")
-	}
-	return df, nil
 }
 
 // Value Hi/Lo
@@ -427,6 +432,7 @@ func loop(d *Device) {
 func main() {
 	d, err := New("/dev/ttyUSB0")
 	if err != nil {
+		log.Printf("PANIC\n")
 		panic(err)
 	}
 	loop(d)
