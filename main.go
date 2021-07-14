@@ -1,10 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strings"
+	"time"
 
 	"go.bug.st/serial"
 )
@@ -107,7 +109,6 @@ func (d *Device) getModulmodus() (err error) {
 	default:
 		return errors.New("unknown mode")
 	}
-	fmt.Printf("Mode: %d\n", d.Modus)
 	return nil
 }
 
@@ -180,7 +181,7 @@ func (d *Device) Read1DL() (Dataframe, error) {
 	var buf [1]byte
 	log.Print("Read 1 byte")
 	df := Dataframe{}
-	count, err := d.Port.Read(buf[0:1])
+	count, err := d.Port.Read(buf[:])
 	if err != nil {
 		return df, err
 	}
@@ -226,7 +227,7 @@ func ConvertDataframes(dfs []Dataframe) []Sensors {
 
 			switch vals[i].MeasurementType {
 
-			case Zero:
+			case Zero: // not configured
 				if vals[i].Value != 0.0 {
 					panic("expect zero")
 				}
@@ -342,7 +343,7 @@ func ConvertHeats(dfs []Dataframe) ([]float32, []float32) {
 func ConvertPowerEnergyBytes(b []byte) (float32, float32) {
 	lowlow := b[0]
 	var val int32
-	for i := 3; i <= 1; i-- {
+	for i := 3; i >= 1; i-- {
 		val <<= 8
 		val |= int32(b[i])
 	}
@@ -353,25 +354,80 @@ func ConvertPowerEnergyBytes(b []byte) (float32, float32) {
 	return power, energy
 }
 
+var b2i = map[bool]int{false: 0, true: 1}
+
+// Convert to CSV (Same as dlogg-linux)
+func printCSV(sensors []Sensors, digitalOuts []bool, rates []int8, powers []float32, energies []float32) string {
+
+	builder := &strings.Builder{}
+	t := time.Now()
+	builder.WriteString(t.Format("02.01.06;15:04:05;"))
+
+	for _, v := range sensors {
+		if v.MeasurementType == 0 {
+			builder.WriteString(" ---;")
+		} else {
+			fmt.Fprintf(builder, " %.1f;", v.Value)
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		v := b2i[digitalOuts[i]]
+		fmt.Fprintf(builder, " %d;%d;", v, rates[i])
+	}
+	for i := 2; i < 5; i++ {
+		v := b2i[digitalOuts[i]]
+		fmt.Fprintf(builder, " %d;", v)
+	}
+	for i := 5; i < 7; i++ {
+		v := b2i[digitalOuts[i]]
+		fmt.Fprintf(builder, " %d;%d;", v, rates[i-4])
+	}
+	for i := 7; i < 12; i++ {
+		v := b2i[digitalOuts[i]]
+		fmt.Fprintf(builder, " %d;", v)
+	}
+	for i := 0; i < len(powers); i++ {
+		fmt.Fprintf(builder, " %.1f;%.1f;", powers[i], energies[i])
+	}
+	builder.WriteString(" ---; ---;")
+
+	builder.WriteString("\n")
+	return builder.String()
+}
+
 // Layout
+
+func loop(d *Device) {
+	for {
+		b, err := d.readCurrentData()
+		if err != nil {
+			panic(err)
+		}
+
+		sensors := ConvertDataframes(b)
+		digitalOuts := ConvertDigitalOutputs(b)
+		rates := ConvertRates(b)
+		powers, energies := ConvertHeats(b)
+		//logg := LoggEntry{Sensors: sensors, Outputs: digitalOuts, RateOutputs: rates, Power: powers, Energy: energies}
+		//buf, _ := json.Marshal(logg)
+		//fmt.Printf("%s\n", string(buf))
+		t := time.Now()
+		filename := t.Format("E0601.csv")
+		f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Fprintf(f, "%s", printCSV(sensors, digitalOuts, rates, powers, energies))
+		f.Close()
+		time.Sleep(time.Second * 30)
+	}
+}
 
 func main() {
 	d, err := New("/dev/ttyUSB0")
 	if err != nil {
 		panic(err)
 	}
-	b, err := d.readCurrentData()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("%+v", b)
-
-	sensors := ConvertDataframes(b)
-	digitalOuts := ConvertDigitalOutputs(b)
-	rates := ConvertRates(b)
-	powers, energies := ConvertHeats(b)
-	logg := LoggEntry{Sensors: sensors, Outputs: digitalOuts, RateOutputs: rates, Power: powers, Energy: energies}
-	buf, _ := json.Marshal(logg)
-	fmt.Printf("%s\n", string(buf))
-
+	loop(d)
 }
