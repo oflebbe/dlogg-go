@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"go.bug.st/serial"
 )
 
@@ -404,6 +405,9 @@ func printCSV(sensors []Sensors, digitalOuts []bool, rates []int8, powers []floa
 // Layout
 
 func loop(d *Device) {
+	client := influxdb2.NewClient("http://mirror:8086", "bFPxGR6KWckSyOTI4_ubQmdq03QBPOgnt4Cn1JSKQGXVH5eXpe2yq-gY2rdXvQ0KfMBSSqTz4ILIgyVkVkvigw==")
+	writeAPI := client.WriteAPI("hagenloherstr63", "solar")
+	influxErrors := writeAPI.Errors()
 	for {
 		b, err := d.readCurrentData()
 		if err != nil {
@@ -425,6 +429,40 @@ func loop(d *Device) {
 		}
 		fmt.Fprintf(f, "%s", printCSV(sensors, digitalOuts, rates, powers, energies))
 		f.Close()
+		influx := map[string]interface{}{}
+
+		for k, v := range sensors {
+			switch v.MeasurementType {
+			case Temperature:
+				influx[fmt.Sprintf("temperature_%d", k)] = v.Value
+			case Volume:
+				influx[fmt.Sprintf("volume_%d", k)] = v.Value
+			case Digital:
+				influx[fmt.Sprintf("digital:%d", k)] = v.Value
+			}
+		}
+
+		for i := 0; i < len(powers); i++ {
+			influx[fmt.Sprintf("power_%d", i)] = powers[i]
+			influx[fmt.Sprintf("energy_%d", i)] = energies[i]
+		}
+
+		p := influxdb2.NewPoint(
+			"solar",
+			map[string]string{
+				"name": "solar",
+			},
+			influx,
+			time.Now())
+		// write asynchronously
+		select {
+		case errors := <-influxErrors:
+			fmt.Println(errors)
+		default:
+		}
+		fmt.Println("vor inflix")
+		writeAPI.WritePoint(p)
+		fmt.Println("nach inflix")
 		time.Sleep(time.Second * 30)
 	}
 }
