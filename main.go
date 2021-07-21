@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
-	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"go.bug.st/serial"
 )
 
@@ -141,7 +141,6 @@ func (d *Device) readCurrentData() ([]Dataframe, error) {
 	if len != 1 {
 		return nil, errors.New("couldn't write")
 	}
-	log.Print("Data Read issued")
 
 	dfs := []Dataframe{}
 	buf, err := d.Read1DL()
@@ -157,12 +156,16 @@ func (d *Device) readCurrentData() ([]Dataframe, error) {
 		dfs = append(dfs, buf)
 	}
 	var chksum [1]byte
-	d.Port.Read(chksum[:])
-	log.Print("Chksum read")
+	len, err = d.Port.Read(chksum[:])
+	if err != nil {
+		return dfs, err
+	}
+	if len != 1 {
+		return dfs, errors.New("chksum could not being read")
+	}
 	if calcChksum(dfs) != chksum[0] {
 		return nil, errors.New("chksum does not match")
 	}
-	log.Print("Chksum matched")
 	return dfs, nil
 }
 
@@ -180,7 +183,6 @@ func calcChksum(dfs []Dataframe) byte {
 
 func (d *Device) Read1DL() (Dataframe, error) {
 	var buf [1]byte
-	log.Print("Read 1 byte")
 	df := Dataframe{}
 	count, err := d.Port.Read(buf[:])
 	if err != nil {
@@ -201,11 +203,13 @@ func (d *Device) Read1DL() (Dataframe, error) {
 	startBuf := 0
 	expected := len(df.RawData)
 	for {
-
-		log.Printf("have to read %d bytes", expected-startBuf)
 		lenRead, err := d.Port.Read(df.RawData[startBuf:expected])
 		if err != nil {
 			return df, err
+		}
+		if lenRead == 0 {
+			// Timeout
+			return df, errors.New("read timeout")
 		}
 		if startBuf+lenRead == expected {
 			return df, nil
@@ -405,19 +409,23 @@ func printCSV(sensors []Sensors, digitalOuts []bool, rates []int8, powers []floa
 // Layout
 
 func loop(d *Device) {
-	client := influxdb2.NewClient("http://mirror:8086", "bFPxGR6KWckSyOTI4_ubQmdq03QBPOgnt4Cn1JSKQGXVH5eXpe2yq-gY2rdXvQ0KfMBSSqTz4ILIgyVkVkvigw==")
-	writeAPI := client.WriteAPI("hagenloherstr63", "solar")
-	influxErrors := writeAPI.Errors()
+	updateInfluxdb := initInfluxdb()
 	for {
 		b, err := d.readCurrentData()
 		if err != nil {
-			panic(err)
+			log.Printf("%v while reading\n", err)
+			// Issue reset flush read buffer
+			var buf [1000]byte
+			d.Port.Read(buf[:])
+			log.Println()
+			continue
 		}
 
 		sensors := ConvertDataframes(b)
 		digitalOuts := ConvertDigitalOutputs(b)
 		rates := ConvertRates(b)
 		powers, energies := ConvertHeats(b)
+		SetValues(sensors[0].Value, sensors[1].Value, sensors[2].Value, rates[0])
 		//logg := LoggEntry{Sensors: sensors, Outputs: digitalOuts, RateOutputs: rates, Power: powers, Energy: energies}
 		//buf, _ := json.Marshal(logg)
 		//fmt.Printf("%s\n", string(buf))
@@ -429,40 +437,7 @@ func loop(d *Device) {
 		}
 		fmt.Fprintf(f, "%s", printCSV(sensors, digitalOuts, rates, powers, energies))
 		f.Close()
-		influx := map[string]interface{}{}
-
-		for k, v := range sensors {
-			switch v.MeasurementType {
-			case Temperature:
-				influx[fmt.Sprintf("temperature_%d", k)] = v.Value
-			case Volume:
-				influx[fmt.Sprintf("volume_%d", k)] = v.Value
-			case Digital:
-				influx[fmt.Sprintf("digital:%d", k)] = v.Value
-			}
-		}
-
-		for i := 0; i < len(powers); i++ {
-			influx[fmt.Sprintf("power_%d", i)] = powers[i]
-			influx[fmt.Sprintf("energy_%d", i)] = energies[i]
-		}
-
-		p := influxdb2.NewPoint(
-			"solar",
-			map[string]string{
-				"name": "solar",
-			},
-			influx,
-			time.Now())
-		// write asynchronously
-		select {
-		case errors := <-influxErrors:
-			fmt.Println(errors)
-		default:
-		}
-		fmt.Println("vor inflix")
-		writeAPI.WritePoint(p)
-		fmt.Println("nach inflix")
+		updateInfluxdb(sensors, digitalOuts, rates, powers, energies)
 		time.Sleep(time.Second * 30)
 	}
 }
@@ -470,8 +445,15 @@ func loop(d *Device) {
 func main() {
 	d, err := New("/dev/ttyUSB0")
 	if err != nil {
-		log.Printf("PANIC\n")
 		panic(err)
 	}
+	d.Port.SetReadTimeout(time.Second * 5)
+
+	http.HandleFunc("/", Handler)
+
+	go func() {
+		panic(http.ListenAndServe(":8080", nil))
+	}()
+
 	loop(d)
 }
