@@ -139,7 +139,7 @@ func Test_6_7_21(t *testing.T) {
 		t.Errorf("last value wrong: expected %f, got %f", 500.0, sensors[15].Value)
 	}
 	powers, energies := ConvertHeats(b)
-	if math.Abs(powers[0]-float32(5.196485)) > 1.0e-5 {
+	if math.Abs(float64(powers[0])-5.196485) > 1.0e-5 {
 		t.Errorf("unexpected %f, %f", powers[0], 5.196485)
 	}
 	if energies[0] != 54621.699219 {
