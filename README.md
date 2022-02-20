@@ -12,7 +12,7 @@ The project should work on any operating system.
 
 # Installation
 ```
-go get github.com/oflebbe/dlogg-go@v0.0.4
+go get github.com/oflebbe/dlogg-go@latest
 ```
 
 
